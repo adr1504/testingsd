@@ -4,8 +4,6 @@ FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 ENV LD_PRELOAD=libtcmalloc_minimal.so.4
-# API key actualizada de CivitAI
-ENV CIVITAI_API_KEY=ce7555dd88241242076f59bee3af8ecc
 
 # Instalar dependencias del sistema con Python 3.10
 RUN apt-get update && \
@@ -56,9 +54,6 @@ RUN git clone https://github.com/BlafKing/sd-civitai-browser-plus.git --depth=1 
     git clone https://github.com/hako-mikan/sd-webui-regional-prompter.git --depth=1 && \
     git clone https://github.com/NoCrypt/sd-fast-pnginfo.git --depth=1
 
-# Configurar API key actualizada de CivitAI
-RUN echo $CIVITAI_API_KEY > sd-civitai-browser-plus/api_key.txt
-
 # Instalar dependencias de WebUI
 WORKDIR /app/stable-diffusion-webui-reForge
 RUN pip install --no-cache-dir -r requirements_versions.txt
@@ -67,7 +62,11 @@ RUN pip install --no-cache-dir -r requirements_versions.txt
 RUN echo '#!/bin/bash\n' > /start.sh && \
     echo 'source /app/venv/bin/activate\n' >> /start.sh && \
     echo 'cd /app/stable-diffusion-webui-reForge\n' >> /start.sh && \
-    echo 'echo $CIVITAI_API_KEY > extensions/sd-civitai-browser-plus/api_key.txt\n' >> /start.sh && \
+    # Configurar API key solo si existe la variable de entorno
+    echo 'if [ -n "$CIVITAI_API_KEY" ]; then\n' >> /start.sh && \
+    echo '  echo "Configurando API key de CivitAI..."\n' >> /start.sh && \
+    echo '  echo $CIVITAI_API_KEY > extensions/sd-civitai-browser-plus/api_key.txt\n' >> /start.sh && \
+    echo 'fi\n' >> /start.sh && \
     echo 'python launch.py \\\n' >> /start.sh && \
     echo '  --listen \\\n' >> /start.sh && \
     echo '  --enable-insecure-extension-access \\\n' >> /start.sh && \
