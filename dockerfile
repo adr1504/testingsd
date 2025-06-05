@@ -1,55 +1,82 @@
-# Dockerfile for Stable Diffusion WebUI with Extensions - ReForge Version
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+# Usamos una imagen base con CUDA 11.8
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 
-# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/root/miniconda3/bin:$PATH"
+ENV TZ=Etc/UTC
+ENV LD_PRELOAD=libtcmalloc_minimal.so.4
+# API key actualizada de CivitAI
+ENV CIVITAI_API_KEY=ce7555dd88241242076f59bee3af8ecc
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Instalar dependencias del sistema con Python 3.10
+RUN apt-get update && \
+    apt-get install -y \
     git \
-    aria2 \
-    curl \
-    ca-certificates \
-    python3 \
-    python3-pip \
+    wget \
+    python3.10 \
+    python3.10-venv \
+    python3.10-dev \
     libgl1 \
     libglib2.0-0 \
-    git-lfs \
+    libgoogle-perftools4 \
+    libtcmalloc-minimal4 \
+    aria2 \
+    psmisc \
+    && ln -s /usr/bin/python3.10 /usr/bin/python3 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Miniconda with hash check
-RUN aria2c -x 16 -s 16 -o miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
-    && echo "5c49145e469f31d96f65c3cd5c8e3d3d2d0a6cb3b2378e26792e9f433d5cbe52  miniconda.sh" | sha256sum -c - \
-    && bash miniconda.sh -b -p /root/miniconda3 \
-    && rm miniconda.sh
+# Crear y activar entorno virtual Python
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
 
-# Clone the ReForge WebUI
-WORKDIR /stable-diffusion-webui
-RUN git clone https://github.com/Panchovix/stable-diffusion-webui-reForge .
+# Instalar dependencias básicas de Python
+RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# Add webui-user.sh with startup arguments
-RUN echo "#!/bin/bash\n\
-export COMMANDLINE_ARGS=\"--enable-insecure-extension-access --xformers --share --update-all-extensions --cuda-stream\"\n\
-exec bash webui.sh \"$@\"" > webui-user.sh && \
-    chmod +x webui-user.sh
+# Instalar PyTorch con CUDA 11.8
+RUN pip install --no-cache-dir \
+    torch==2.0.1+cu118 \
+    torchvision==0.15.2+cu118 \
+    torchaudio==2.0.2 \
+    --index-url https://download.pytorch.org/whl/cu118
 
-# Install Extensions
-RUN git clone https://github.com/BlafKing/sd-civitai-browser-plus extensions/sd-civitai-browser-plus && \
-    echo "API_KEY=ce7555dd88241242076f59bee3af8ecc" > extensions/sd-civitai-browser-plus/config.env && \
-    git clone https://github.com/DominikDoom/a1111-sd-webui-tagcomplete extensions/a1111-sd-webui-tagcomplete && \
-    git clone https://github.com/Bing-su/adetailer extensions/adetailer && \
-    git clone https://github.com/hako-mikan/sd-webui-regional-prompter extensions/sd-webui-regional-prompter && \
-    git clone https://github.com/NoCrypt/sd-fast-pnginfo extensions/sd-fast-pnginfo
+# Clonar ReForge
+WORKDIR /app
+RUN git clone https://github.com/Panchovix/stable-diffusion-webui-reForge --depth=1
 
-# Download the checkpoint model with hash check
-RUN mkdir -p /stable-diffusion-webui/models/Stable-diffusion && \
-    aria2c -x 16 -s 16 -o /stable-diffusion-webui/models/Stable-diffusion/model.safetensors \
-    https://civitai.com/api/download/models/1761560 && \
-    echo "d46b17f17674fa3f1e5ea4d8e5e9dd01bbdb7c4d63ec32f7a0d69ea162172c15  /stable-diffusion-webui/models/Stable-diffusion/model.safetensors" | sha256sum -c -
+# Configurar estructura de directorios para RunPod
+RUN mkdir -p /workspace/{models,outputs} && \
+    ln -s /workspace/models /app/stable-diffusion-webui-reForge/models && \
+    ln -s /workspace/outputs /app/stable-diffusion-webui-reForge/outputs
 
-# Expose default port
+# Instalar extensiones
+WORKDIR /app/stable-diffusion-webui-reForge/extensions
+RUN git clone https://github.com/BlafKing/sd-civitai-browser-plus.git --depth=1 && \
+    git clone https://github.com/DominikDoom/a1111-sd-webui-tagcomplete.git --depth=1 && \
+    git clone https://github.com/Bing-su/adetailer.git --depth=1 && \
+    git clone https://github.com/hako-mikan/sd-webui-regional-prompter.git --depth=1 && \
+    git clone https://github.com/NoCrypt/sd-fast-pnginfo.git --depth=1
+
+# Configurar API key actualizada de CivitAI
+RUN echo $CIVITAI_API_KEY > sd-civitai-browser-plus/api_key.txt
+
+# Instalar dependencias de WebUI
+WORKDIR /app/stable-diffusion-webui-reForge
+RUN pip install --no-cache-dir -r requirements_versions.txt
+
+# Crear script de inicio optimizado
+RUN echo '#!/bin/bash\n' > /start.sh && \
+    echo 'source /app/venv/bin/activate\n' >> /start.sh && \
+    echo 'cd /app/stable-diffusion-webui-reForge\n' >> /start.sh && \
+    echo 'echo $CIVITAI_API_KEY > extensions/sd-civitai-browser-plus/api_key.txt\n' >> /start.sh && \
+    echo 'python launch.py \\\n' >> /start.sh && \
+    echo '  --listen \\\n' >> /start.sh && \
+    echo '  --enable-insecure-extension-access \\\n' >> /start.sh && \
+    echo '  --skip-torch-cuda-test \\\n' >> /start.sh && \
+    echo '  --no-download-sd-model \\\n' >> /start.sh && \
+    echo '  --xformers \\\n' >> /start.sh && \
+    echo '  --skip-prepare-environment\n' >> /start.sh && \
+    chmod +x /start.sh
+
+# Exponer puerto y configurar entrada
 EXPOSE 7860
-
-# Entry point
-CMD ["./webui-user.sh"]
+CMD ["/start.sh"]
